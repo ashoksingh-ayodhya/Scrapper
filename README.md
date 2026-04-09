@@ -53,6 +53,30 @@ python main.py -v facebook "https://www.facebook.com/SomePage/posts/1234567890" 
 | `--scroll-pause` | Seconds between actions | `2.0` |
 | `--max-loads` | Max "View more comments" clicks | `50` |
 
+### Facebook Page Scraper
+
+Scrape comments from **all posts** on a Facebook page, filtered by date.
+
+```bash
+# Scrape all comments from C3Pay page for the last 12 months
+python main.py facebook-page "https://www.facebook.com/C3Pay" \
+    --months 12 -o c3pay_comments.csv
+
+# Output as JSON with verbose logging
+python main.py -v facebook-page "https://www.facebook.com/C3Pay" \
+    --months 6 -o c3pay_comments.json
+```
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-o, --output` | Output file (`.csv` or `.json`) | `facebook_page_comments.csv` |
+| `--months` | Only include posts from the last N months | `12` |
+| `--no-headless` | Show the browser window | off |
+| `--scroll-pause` | Seconds between page loads | `3.0` |
+| `--max-pages` | Max timeline pages to traverse | `200` |
+
 ### Google Maps Reviews Scraper
 
 ```bash
@@ -94,6 +118,19 @@ for comment in comments:
     for reply in comment.replies:
         print(f"  ↳ {reply.author}: {reply.text}")
 scraper.save_to_csv(comments, "output.csv")
+scraper.close()
+```
+
+```python
+from facebook_scraper.page_scraper import FacebookPageScraper
+
+scraper = FacebookPageScraper(headless=True, months=12)
+results = scraper.scrape_page("https://www.facebook.com/C3Pay")
+for post in results:
+    print(f"Post: {post.post_text[:80]}...")
+    for comment in post.comments:
+        print(f"  {comment.author}: {comment.text}")
+scraper.save_to_csv(results, "c3pay_comments.csv")
 scraper.close()
 ```
 
@@ -143,7 +180,8 @@ Scrapper/
 ├── requirements.txt                     # Python dependencies
 ├── facebook_scraper/
 │   ├── __init__.py
-│   └── comments_scraper.py              # Facebook comments bot
+│   ├── comments_scraper.py              # Facebook single-post comments bot
+│   └── page_scraper.py                  # Facebook page-level scraper
 ├── google_maps_scraper/
 │   ├── __init__.py
 │   └── reviews_scraper.py               # Google Maps reviews bot

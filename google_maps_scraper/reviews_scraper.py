@@ -30,7 +30,6 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +88,7 @@ class GoogleMapsReviewsScraper:
             "Chrome/120.0.0.0 Safari/537.36"
         )
 
-        service = Service(ChromeDriverManager().install())
+        service = Service()  # uses chromedriver from PATH
         self.driver = webdriver.Chrome(service=service, options=options)
         self.driver.set_page_load_timeout(self.page_load_timeout)
 

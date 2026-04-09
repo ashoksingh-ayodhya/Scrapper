@@ -38,6 +38,42 @@ def _run_facebook(args: argparse.Namespace) -> None:
         scraper.close()
 
 
+def _run_facebook_page(args: argparse.Namespace) -> None:
+    from facebook_scraper.page_scraper import FacebookPageScraper
+
+    scraper = FacebookPageScraper(
+        headless=not args.no_headless,
+        scroll_pause=args.scroll_pause,
+        months=args.months,
+        max_pages=args.max_pages,
+    )
+    try:
+        results = scraper.scrape_page(args.url)
+        total_comments = sum(len(p.comments) for p in results)
+        total_replies = sum(
+            sum(len(c.replies) for c in p.comments) for p in results
+        )
+
+        print(
+            f"Scraped {len(results)} post(s), "
+            f"{total_comments} comment(s), "
+            f"{total_replies} reply/replies."
+        )
+
+        if not results:
+            print("No posts found within the specified time window.")
+            return
+
+        if args.output.endswith(".json"):
+            scraper.save_to_json(results, args.output)
+        else:
+            scraper.save_to_csv(results, args.output)
+
+        print(f"Results saved to {args.output}")
+    finally:
+        scraper.close()
+
+
 def _run_google_maps(args: argparse.Namespace) -> None:
     from google_maps_scraper.reviews_scraper import GoogleMapsReviewsScraper
 
@@ -113,6 +149,45 @@ def main() -> None:
         help="Max times to click 'View more comments'. Default: 50",
     )
     fb_parser.set_defaults(func=_run_facebook)
+
+    # ---- Facebook Page sub-command ----
+    fbp_parser = subparsers.add_parser(
+        "facebook-page",
+        help="Scrape comments from all posts on a Facebook page.",
+    )
+    fbp_parser.add_argument(
+        "url",
+        help="URL of the Facebook page (e.g. https://www.facebook.com/C3Pay).",
+    )
+    fbp_parser.add_argument(
+        "-o", "--output",
+        default="facebook_page_comments.csv",
+        help="Output file path (CSV or JSON). Default: facebook_page_comments.csv",
+    )
+    fbp_parser.add_argument(
+        "--months",
+        type=int,
+        default=12,
+        help="Only scrape posts from the last N months. Default: 12",
+    )
+    fbp_parser.add_argument(
+        "--no-headless",
+        action="store_true",
+        help="Show the browser window (disable headless mode).",
+    )
+    fbp_parser.add_argument(
+        "--scroll-pause",
+        type=float,
+        default=3.0,
+        help="Seconds to pause between page loads. Default: 3.0",
+    )
+    fbp_parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=200,
+        help="Max timeline pages to traverse. Default: 200",
+    )
+    fbp_parser.set_defaults(func=_run_facebook_page)
 
     # ---- Google Maps sub-command ----
     gm_parser = subparsers.add_parser(
