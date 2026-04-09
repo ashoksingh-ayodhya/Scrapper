@@ -27,6 +27,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
@@ -227,7 +228,7 @@ class GoogleMapsReviewsScraper:
                 "or the URL points directly to the reviews panel."
             )
 
-    def _get_scrollable_panel(self):
+    def _get_scrollable_panel(self) -> WebElement | None:
         """Return the scrollable reviews panel element."""
         # The reviews panel is a scrollable <div> inside the side panel.
         # We look for the element with role="main" or the specific class.
@@ -314,7 +315,7 @@ class GoogleMapsReviewsScraper:
 
         return reviews
 
-    def _parse_review_element(self, el) -> Review | None:
+    def _parse_review_element(self, el: WebElement) -> Review | None:
         """Parse a single review element into a :class:`Review`."""
         try:
             # Reviewer name

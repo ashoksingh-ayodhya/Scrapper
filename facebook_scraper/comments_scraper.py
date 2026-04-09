@@ -28,6 +28,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
@@ -241,7 +242,7 @@ class FacebookCommentsScraper:
 
         return comments
 
-    def _parse_comment_div(self, div) -> Comment | None:
+    def _parse_comment_div(self, div: WebElement) -> Comment | None:
         """Parse a single comment <div> into a :class:`Comment`."""
         try:
             text_parts: list[str] = []
@@ -279,7 +280,7 @@ class FacebookCommentsScraper:
         except StaleElementReferenceException:
             return None
 
-    def _load_replies(self, comment_div, comment: Comment) -> None:
+    def _load_replies(self, comment_div: WebElement, comment: Comment) -> None:
         """Expand and scrape replies nested under a comment."""
         for _ in range(self.max_reply_loads):
             try:
@@ -320,7 +321,7 @@ class FacebookCommentsScraper:
             ):
                 break
 
-    def _parse_reply_div(self, div) -> Reply | None:
+    def _parse_reply_div(self, div: WebElement) -> Reply | None:
         """Parse a reply <div> into a :class:`Reply`."""
         try:
             author = ""
