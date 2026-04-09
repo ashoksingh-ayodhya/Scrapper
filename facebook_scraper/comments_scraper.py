@@ -34,6 +34,20 @@ from selenium.webdriver.support.ui import WebDriverWait
 logger = logging.getLogger(__name__)
 
 
+def _create_chrome_service() -> Service:
+    """Create a Chrome Service, using system chromedriver if available."""
+    import shutil
+
+    if shutil.which("chromedriver"):
+        return Service()
+    # Fall back to webdriver-manager for environments without chromedriver
+    try:
+        from webdriver_manager.chrome import ChromeDriverManager
+        return Service(ChromeDriverManager().install())
+    except Exception:
+        return Service()  # last resort: let Selenium try to find it
+
+
 @dataclass
 class Reply:
     """A single reply to a Facebook comment."""
@@ -103,7 +117,7 @@ class FacebookCommentsScraper:
             "Chrome/120.0.0.0 Mobile Safari/537.36"
         )
 
-        service = Service()  # uses chromedriver from PATH
+        service = _create_chrome_service()
         self.driver = webdriver.Chrome(service=service, options=options)
         self.driver.set_page_load_timeout(self.page_load_timeout)
 
