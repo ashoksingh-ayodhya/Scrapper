@@ -34,18 +34,24 @@ from selenium.webdriver.support.ui import WebDriverWait
 logger = logging.getLogger(__name__)
 
 
+_CHROMIUM_BINARY = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
+_CHROMEDRIVER_PATH = "/root/.wdm/drivers/chromedriver/linux64/141/chromedriver"
+
+
 def _create_chrome_service() -> Service:
-    """Create a Chrome Service, using system chromedriver if available."""
+    """Create a Chrome Service, preferring the bundled chromedriver."""
+    import os
     import shutil
 
+    if os.path.isfile(_CHROMEDRIVER_PATH):
+        return Service(_CHROMEDRIVER_PATH)
     if shutil.which("chromedriver"):
         return Service()
-    # Fall back to webdriver-manager for environments without chromedriver
     try:
         from webdriver_manager.chrome import ChromeDriverManager
         return Service(ChromeDriverManager().install())
     except Exception:
-        return Service()  # last resort: let Selenium try to find it
+        return Service()
 
 
 @dataclass
@@ -101,6 +107,9 @@ class GoogleMapsReviewsScraper:
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         )
+        import os
+        if os.path.isfile(_CHROMIUM_BINARY):
+            options.binary_location = _CHROMIUM_BINARY
 
         service = _create_chrome_service()
         self.driver = webdriver.Chrome(service=service, options=options)
@@ -222,43 +231,73 @@ class GoogleMapsReviewsScraper:
 
     def _open_reviews_tab(self) -> None:
         """Click the 'Reviews' tab to open the reviews panel."""
-        try:
-            wait = WebDriverWait(self.driver, 10)
-            reviews_tab = wait.until(
-                EC.element_to_be_clickable(
-                    (
-                        By.XPATH,
-                        "//button[contains(@aria-label,'Reviews') or "
-                        ".//div[text()='Reviews']]",
-                    )
-                )
-            )
-            reviews_tab.click()
-            time.sleep(self.scroll_pause)
-        except TimeoutException:
-            logger.warning(
-                "Could not find Reviews tab – page may already show reviews "
-                "or the URL points directly to the reviews panel."
-            )
+        xpaths = [
+            "//button[contains(@aria-label,'Reviews')]",
+            "//button[.//div[text()='Reviews']]",
+            "//button[.//span[text()='Reviews']]",
+            # Google Maps uses role=tab for the tab strip
+            "//*[@role='tab'][contains(.,'Reviews')]",
+        ]
+        for xpath in xpaths:
+            try:
+                wait = WebDriverWait(self.driver, 5)
+                tab = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+                tab.click()
+                time.sleep(self.scroll_pause + 1)
+                return
+            except TimeoutException:
+                continue
+        logger.warning(
+            "Could not find Reviews tab – page may already show reviews "
+            "or the URL points directly to the reviews panel."
+        )
 
     def _get_scrollable_panel(self) -> WebElement | None:
         """Return the scrollable reviews panel element."""
-        # The reviews panel is a scrollable <div> inside the side panel.
-        # We look for the element with role="main" or the specific class.
+        # scrollTop is a DOM property, not an HTML attribute — use JS to
+        # test scrollability (scrollHeight > clientHeight).
         selectors = [
             "div.m6QErb.DxyBCb.kA9KIf.dS8AEf",  # common reviews panel
             "div.m6QErb.DxyBCb.kA9KIf",
             "div.m6QErb",
-            "div[role='main']",
+            "div[role='feed']",
+            "div[aria-label*='Reviews']",
         ]
         for sel in selectors:
             try:
                 panels = self.driver.find_elements(By.CSS_SELECTOR, sel)
                 for panel in panels:
-                    if panel.get_attribute("scrollTop") is not None:
-                        return panel
+                    try:
+                        scrollable = self.driver.execute_script(
+                            "return arguments[0].scrollHeight > arguments[0].clientHeight;",
+                            panel,
+                        )
+                        if scrollable:
+                            return panel
+                    except Exception:
+                        continue
             except NoSuchElementException:
                 continue
+
+        # Last resort: any tall div that can be scrolled
+        try:
+            candidates = self.driver.find_elements(By.CSS_SELECTOR, "div[tabindex]")
+            for el in candidates:
+                try:
+                    scrollable = self.driver.execute_script(
+                        "var s=window.getComputedStyle(arguments[0]);"
+                        "return (s.overflow==='auto'||s.overflow==='scroll'||"
+                        "s.overflowY==='auto'||s.overflowY==='scroll') && "
+                        "arguments[0].scrollHeight > arguments[0].clientHeight;",
+                        el,
+                    )
+                    if scrollable:
+                        return el
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
         return None
 
     def _scroll_reviews_panel(self) -> None:
@@ -310,100 +349,84 @@ class GoogleMapsReviewsScraper:
         """Parse all review elements currently visible on the page."""
         reviews: list[Review] = []
 
-        # Google Maps review containers have a data-review-id attribute
-        review_elements = self.driver.find_elements(
-            By.CSS_SELECTOR, "div[data-review-id]"
+        # Google Maps review containers: try several known selectors in order
+        review_elements = (
+            self.driver.find_elements(By.CSS_SELECTOR, "div[data-review-id]")
+            or self.driver.find_elements(By.CSS_SELECTOR, "div.jftiEf")
+            or self.driver.find_elements(By.CSS_SELECTOR, "div[data-hveid] div[aria-label]")
         )
-
-        if not review_elements:
-            # Fallback: try aria-label based selector
-            review_elements = self.driver.find_elements(
-                By.CSS_SELECTOR, "div.jftiEf"
-            )
 
         for el in review_elements:
             review = self._parse_review_element(el)
-            if review:
+            if review and (review.reviewer_name or review.text):
                 reviews.append(review)
 
         return reviews
 
+    def _find_text(self, el: WebElement, *css_selectors: str) -> str:
+        """Return text from the first matching CSS selector, or empty string."""
+        for sel in css_selectors:
+            try:
+                found = el.find_element(By.CSS_SELECTOR, sel)
+                text = found.text.strip()
+                if text:
+                    return text
+            except (NoSuchElementException, StaleElementReferenceException):
+                continue
+        return ""
+
     def _parse_review_element(self, el: WebElement) -> Review | None:
         """Parse a single review element into a :class:`Review`."""
         try:
-            # Reviewer name
-            name = ""
-            try:
-                name_el = el.find_element(
-                    By.CSS_SELECTOR, "div.d4r55, button[data-review-id] div"
-                )
-                name = name_el.text.strip()
-            except NoSuchElementException:
+            # --- Reviewer name ---
+            name = self._find_text(
+                el,
+                "div.d4r55",
+                "button[data-review-id] div",
+                "div[class*='fontHeadlineSmall']",
+            )
+            if not name:
                 try:
-                    name_el = el.find_element(By.CSS_SELECTOR, "a[data-review-id]")
-                    name = name_el.get_attribute("aria-label") or ""
-                    name = name.replace("Photo of ", "").strip()
-                except NoSuchElementException:
+                    a_el = el.find_element(By.CSS_SELECTOR, "a[data-review-id], a[href*='contrib']")
+                    name = (a_el.get_attribute("aria-label") or "").replace("Photo of ", "").strip()
+                    if not name:
+                        name = a_el.text.strip()
+                except (NoSuchElementException, StaleElementReferenceException):
                     pass
 
-            # Star rating
+            # --- Star rating ---
             rating = 0
-            try:
-                star_el = el.find_element(
-                    By.CSS_SELECTOR, "span.kvMYJc"
-                )
-                aria = star_el.get_attribute("aria-label") or ""
-                # e.g. "5 stars" or "4 stars"
-                for part in aria.split():
-                    if part.isdigit():
-                        rating = int(part)
+            star_selectors = ["span.kvMYJc", "span[role='img'][aria-label*='star']", "span[aria-label*='star']"]
+            for sel in star_selectors:
+                try:
+                    star_el = el.find_element(By.CSS_SELECTOR, sel)
+                    aria = star_el.get_attribute("aria-label") or ""
+                    for part in aria.split():
+                        if part.isdigit():
+                            rating = int(part)
+                            break
+                    if rating:
                         break
-            except NoSuchElementException:
-                pass
+                except (NoSuchElementException, StaleElementReferenceException):
+                    continue
 
-            # Relative date (e.g. "2 months ago")
-            relative_date = ""
-            try:
-                date_el = el.find_element(
-                    By.CSS_SELECTOR, "span.rsqaWe"
-                )
-                relative_date = date_el.text.strip()
-            except NoSuchElementException:
-                pass
+            # --- Relative date ---
+            relative_date = self._find_text(el, "span.rsqaWe", "span[class*='fontBodySmall']")
 
-            # Review text
-            text = ""
-            try:
-                text_el = el.find_element(
-                    By.CSS_SELECTOR, "span.wiI7pd"
-                )
-                text = text_el.text.strip()
-            except NoSuchElementException:
-                pass
+            # --- Review text ---
+            text = self._find_text(el, "span.wiI7pd", "span[class*='review-full-text']", "div.MyEned span")
 
-            # Owner response
+            # --- Owner response ---
             owner_response = ""
             owner_response_date = ""
-            try:
-                resp_container = el.find_element(
-                    By.CSS_SELECTOR, "div.CDe7pd"
-                )
+            for resp_sel in ("div.CDe7pd", "div[class*='owner-response']"):
                 try:
-                    resp_date_el = resp_container.find_element(
-                        By.CSS_SELECTOR, "span.DZSIDd"
-                    )
-                    owner_response_date = resp_date_el.text.strip()
-                except NoSuchElementException:
-                    pass
-                try:
-                    resp_text_el = resp_container.find_element(
-                        By.CSS_SELECTOR, "div.wiI7pd"
-                    )
-                    owner_response = resp_text_el.text.strip()
-                except NoSuchElementException:
-                    pass
-            except NoSuchElementException:
-                pass
+                    resp_container = el.find_element(By.CSS_SELECTOR, resp_sel)
+                    owner_response_date = self._find_text(resp_container, "span.DZSIDd", "span[class*='fontBodySmall']")
+                    owner_response = self._find_text(resp_container, "div.wiI7pd", "span", "div")
+                    break
+                except (NoSuchElementException, StaleElementReferenceException):
+                    continue
 
             return Review(
                 reviewer_name=name,

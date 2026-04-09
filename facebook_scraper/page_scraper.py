@@ -37,18 +37,24 @@ from selenium.webdriver.support.ui import WebDriverWait
 logger = logging.getLogger(__name__)
 
 
+_CHROMIUM_BINARY = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
+_CHROMEDRIVER_PATH = "/root/.wdm/drivers/chromedriver/linux64/141/chromedriver"
+
+
 def _create_chrome_service() -> Service:
-    """Create a Chrome Service, using system chromedriver if available."""
+    """Create a Chrome Service, preferring the bundled chromedriver."""
+    import os
     import shutil
 
+    if os.path.isfile(_CHROMEDRIVER_PATH):
+        return Service(_CHROMEDRIVER_PATH)
     if shutil.which("chromedriver"):
         return Service()
-    # Fall back to webdriver-manager for environments without chromedriver
     try:
         from webdriver_manager.chrome import ChromeDriverManager
         return Service(ChromeDriverManager().install())
     except Exception:
-        return Service()  # last resort: let Selenium try to find it
+        return Service()
 
 
 @dataclass
@@ -162,6 +168,9 @@ class FacebookPageScraper:
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Mobile Safari/537.36"
         )
+        import os
+        if os.path.isfile(_CHROMIUM_BINARY):
+            options.binary_location = _CHROMIUM_BINARY
 
         service = _create_chrome_service()
         self.driver = webdriver.Chrome(service=service, options=options)
@@ -289,6 +298,16 @@ class FacebookPageScraper:
                 )
                 break
             time.sleep(self.scroll_pause)
+
+            # Detect login/checkpoint redirect
+            cur = self.driver.current_url
+            if any(p in cur for p in ("/login", "/checkpoint", "login.php", "accounts/login")):
+                logger.warning(
+                    "Redirected to login page (%s). "
+                    "This page may require authentication to access.",
+                    cur,
+                )
+                break
 
             # On mbasic, each post is in an <article> or a div with
             # data-ft attribute containing story information.
