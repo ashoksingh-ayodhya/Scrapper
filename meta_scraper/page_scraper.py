@@ -245,6 +245,7 @@ class MetaPageScraper:
 
     def _collect_post_links(self, start_url: str) -> list[tuple[str, str]]:
         posts: list[tuple[str, str]] = []
+        seen: set[str] = set()
         current_url = start_url
 
         for page_num in range(self.pages):
@@ -253,14 +254,13 @@ class MetaPageScraper:
 
             if self._is_login_page():
                 logger.error(
-                    "Redirected to login. Your cookies are missing or expired. "
-                    "Re-export cookies.txt from a logged-in Chrome session."
+                    "Redirected to login. Re-export cookies.txt from a logged-in Chrome session."
                 )
                 break
 
-            new_posts, hit_cutoff = self._parse_timeline_page()
+            new_posts, hit_cutoff = self._parse_timeline_page(seen)
             posts.extend(new_posts)
-            logger.debug("  +%d posts (total %d)", len(new_posts), len(posts))
+            logger.info("Page %d: +%d posts (total %d)", page_num + 1, len(new_posts), len(posts))
 
             if hit_cutoff:
                 logger.info("Reached cutoff date at page %d", page_num + 1)
@@ -274,61 +274,88 @@ class MetaPageScraper:
 
         return posts
 
-    def _parse_timeline_page(self) -> tuple[list[tuple[str, str]], bool]:
+    def _parse_timeline_page(self, seen: set[str]) -> tuple[list[tuple[str, str]], bool]:
+        """Collect post URLs from the current timeline page.
+
+        Strategy: find every <a> whose href contains a post URL pattern.
+        We don't rely on any container element (article, div[data-ft], etc.)
+        because mbasic's markup changes frequently.
+        """
         posts: list[tuple[str, str]] = []
         hit_cutoff = False
 
-        articles = (
-            self.driver.find_elements(By.TAG_NAME, "article")
-            or self.driver.find_elements(By.CSS_SELECTOR, "div[data-ft]")
-        )
+        _POST_PATTERNS = ("/story.php", "/posts/", "/permalink/", "/videos/", "/photos/")
 
-        for art in articles:
-            url, ts = self._post_link_from_article(art)
-            if not url:
+        # Gather all candidate links: "Full Story" text takes priority,
+        # then any href matching a post URL pattern.
+        candidates: list[tuple[str, str]] = []  # (href, nearby_ts)
+
+        all_links = self.driver.find_elements(By.TAG_NAME, "a")
+        for link in all_links:
+            try:
+                href = link.get_attribute("href") or ""
+                text = link.text.strip().lower()
+
+                # Skip non-post links
+                if not any(p in href for p in _POST_PATTERNS):
+                    continue
+                # Skip action/reaction links (like, share, comment)
+                if any(skip in href for skip in ("action=like", "comment_id", "__mref")):
+                    continue
+
+                # Try to grab a nearby timestamp (<abbr> sibling or parent)
+                ts = ""
+                try:
+                    parent = link.find_element(By.XPATH, "./ancestor::div[1]")
+                    abbrs = parent.find_elements(By.TAG_NAME, "abbr")
+                    if abbrs:
+                        ts = abbrs[0].text.strip()
+                except Exception:
+                    pass
+
+                candidates.append((href, ts))
+            except (StaleElementReferenceException, WebDriverException):
                 continue
+
+        # Deduplicate preserving order
+        for href, ts in candidates:
+            # Normalise to mbasic URL
+            if href.startswith("https://www.facebook.com"):
+                href = href.replace("https://www.facebook.com", _MBASIC, 1)
+            elif href.startswith("https://m.facebook.com"):
+                href = href.replace("https://m.facebook.com", _MBASIC, 1)
+            elif not href.startswith("http"):
+                href = _MBASIC + href
+
+            if href in seen:
+                continue
+            seen.add(href)
+
             if ts and _is_too_old(ts, self._cutoff):
                 hit_cutoff = True
                 continue
-            posts.append((url, ts))
+
+            posts.append((href, ts))
 
         return posts, hit_cutoff
 
-    def _post_link_from_article(self, article) -> tuple[str, str]:
-        url = ""
-        ts = ""
-        try:
-            try:
-                ts = article.find_element(By.CSS_SELECTOR, "abbr").text.strip()
-            except NoSuchElementException:
-                pass
-
-            for link in article.find_elements(By.TAG_NAME, "a"):
-                href = link.get_attribute("href") or ""
-                text = link.text.strip().lower()
-                if "full story" in text or "view post" in text:
-                    url = href
-                    break
-                if any(p in href for p in ("/story.php", "/permalink", "/posts/", "/photos/", "/videos/")):
-                    url = href
-            if url and not url.startswith("http"):
-                url = _MBASIC + url
-        except (StaleElementReferenceException, WebDriverException):
-            pass
-        return url, ts
-
     def _next_timeline_page(self) -> str | None:
-        xpaths = [
-            "//a[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'see more post')]",
-            "//a[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'show more')]",
-            "//a[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'more post')]",
-            "//div[@id='m_more_item']//a",
-        ]
-        for xpath in xpaths:
-            for el in self.driver.find_elements(By.XPATH, xpath):
-                href = el.get_attribute("href")
-                if href:
+        for link in self.driver.find_elements(By.TAG_NAME, "a"):
+            try:
+                text = link.text.strip().lower()
+                href = link.get_attribute("href") or ""
+                if any(k in text for k in ("see more post", "show more", "more post", "older post")):
                     return href if href.startswith("http") else _MBASIC + href
+                # mbasic uses a div#m_more_item wrapper
+                if "m_more_item" in (link.get_attribute("id") or ""):
+                    return href if href.startswith("http") else _MBASIC + href
+            except (StaleElementReferenceException, WebDriverException):
+                continue
+        # Also check by id
+        for el in self.driver.find_elements(By.CSS_SELECTOR, "div#m_more_item a, #see_older_threads a"):
+            href = el.get_attribute("href") or ""
+            if href:
+                return href if href.startswith("http") else _MBASIC + href
         return None
 
     # ------------------------------------------------------------------
@@ -361,10 +388,16 @@ class MetaPageScraper:
         comments: list[Comment] = []
         seen: set[str] = set()
 
-        containers = (
-            self.driver.find_elements(By.CSS_SELECTOR, "div[id^='ufi_'] > div > div")
-            or self.driver.find_elements(By.CSS_SELECTOR, "div.dw")
+        # Strategy 1: classic mbasic ufi_ container
+        containers = self.driver.find_elements(
+            By.CSS_SELECTOR, "div[id^='ufi_'] > div > div"
         )
+        # Strategy 2: any div that has an abbr (timestamp) — covers newer mbasic
+        if not containers:
+            containers = [
+                div for div in self.driver.find_elements(By.XPATH,
+                    "//div[.//abbr and .//a and not(ancestor::div[starts-with(@id,'ufi_')])]")
+            ]
 
         for div in containers:
             c = self._parse_comment_div(div)
