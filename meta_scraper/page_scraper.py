@@ -273,11 +273,13 @@ class MetaPageScraper:
                     continue
                 if not any(p in href for p in _POST_PATTERNS):
                     continue
-                if any(s in href for s in _SKIP_PATTERNS):
-                    continue
 
                 # Normalise: strip query string for dedup, keep full URL for visiting
                 base = href.split("?")[0].rstrip("/")
+
+                # Skip non-post links (check base only, not query params)
+                if any(s in base for s in _SKIP_PATTERNS):
+                    continue
                 if base in seen:
                     continue
                 seen.add(base)
