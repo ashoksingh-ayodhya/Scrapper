@@ -39,39 +39,35 @@ def _run_facebook(args: argparse.Namespace) -> None:
 
 
 def _run_facebook_page(args: argparse.Namespace) -> None:
-    from facebook_scraper.page_scraper import FacebookPageScraper
+    from meta_scraper.page_scraper import MetaPageScraper
 
-    scraper = FacebookPageScraper(
-        headless=not args.no_headless,
-        scroll_pause=args.scroll_pause,
+    scraper = MetaPageScraper(
         months=args.months,
-        max_pages=args.max_pages,
+        pages=args.max_pages,
+        cookies=getattr(args, "cookies", None),
     )
-    try:
-        results = scraper.scrape_page(args.url)
-        total_comments = sum(len(p.comments) for p in results)
-        total_replies = sum(
-            sum(len(c.replies) for c in p.comments) for p in results
-        )
+    results = scraper.scrape_page(args.url)
+    total_comments = sum(len(p.comments) for p in results)
+    total_replies = sum(
+        sum(len(c.replies) for c in p.comments) for p in results
+    )
 
-        print(
-            f"Scraped {len(results)} post(s), "
-            f"{total_comments} comment(s), "
-            f"{total_replies} reply/replies."
-        )
+    print(
+        f"Scraped {len(results)} post(s), "
+        f"{total_comments} comment(s), "
+        f"{total_replies} reply/replies."
+    )
 
-        if not results:
-            print("No posts found within the specified time window.")
-            return
+    if not results:
+        print("No posts found within the specified time window.")
+        return
 
-        if args.output.endswith(".json"):
-            scraper.save_to_json(results, args.output)
-        else:
-            scraper.save_to_csv(results, args.output)
+    if args.output.endswith(".json"):
+        scraper.save_to_json(results, args.output)
+    else:
+        scraper.save_to_csv(results, args.output)
 
-        print(f"Results saved to {args.output}")
-    finally:
-        scraper.close()
+    print(f"Results saved to {args.output}")
 
 
 def _run_google_maps(args: argparse.Namespace) -> None:
@@ -171,21 +167,16 @@ def main() -> None:
         help="Only scrape posts from the last N months. Default: 12",
     )
     fbp_parser.add_argument(
-        "--no-headless",
-        action="store_true",
-        help="Show the browser window (disable headless mode).",
-    )
-    fbp_parser.add_argument(
-        "--scroll-pause",
-        type=float,
-        default=3.0,
-        help="Seconds to pause between page loads. Default: 3.0",
-    )
-    fbp_parser.add_argument(
         "--max-pages",
         type=int,
-        default=200,
-        help="Max timeline pages to traverse. Default: 200",
+        default=100,
+        help="Max timeline pages to fetch (~10 posts each). Default: 100",
+    )
+    fbp_parser.add_argument(
+        "--cookies",
+        default=None,
+        metavar="FILE",
+        help="Path to a Netscape cookies.txt for authenticated scraping (optional).",
     )
     fbp_parser.set_defaults(func=_run_facebook_page)
 
