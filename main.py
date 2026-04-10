@@ -13,7 +13,7 @@ import sys
 
 
 def _run_facebook(args: argparse.Namespace) -> None:
-    from facebook_scraper.comments_scraper import FacebookCommentsScraper
+    from meta_scraper.comments_scraper import FacebookCommentsScraper
 
     scraper = FacebookCommentsScraper(
         headless=not args.no_headless,

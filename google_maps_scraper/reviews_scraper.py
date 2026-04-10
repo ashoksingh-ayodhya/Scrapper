@@ -34,17 +34,21 @@ from selenium.webdriver.support.ui import WebDriverWait
 logger = logging.getLogger(__name__)
 
 
-_CHROMIUM_BINARY = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
-_CHROMEDRIVER_PATH = "/root/.wdm/drivers/chromedriver/linux64/141/chromedriver"
+def _create_chrome_service(chromedriver_path: str | None = None) -> Service:
+    """Create a Chrome Service.
 
-
-def _create_chrome_service() -> Service:
-    """Create a Chrome Service, preferring the bundled chromedriver."""
+    Resolution order:
+    1. Explicit *chromedriver_path* argument
+    2. ``CHROMEDRIVER_PATH`` environment variable
+    3. ``chromedriver`` on PATH
+    4. webdriver-manager auto-download
+    """
     import os
     import shutil
 
-    if os.path.isfile(_CHROMEDRIVER_PATH):
-        return Service(_CHROMEDRIVER_PATH)
+    path = chromedriver_path or os.environ.get("CHROMEDRIVER_PATH")
+    if path and os.path.isfile(path):
+        return Service(path)
     if shutil.which("chromedriver"):
         return Service()
     try:
@@ -80,6 +84,12 @@ class GoogleMapsReviewsScraper:
     max_scrolls : int
         Maximum number of times to scroll the reviews panel to load more
         reviews.
+    chrome_binary : str | None
+        Path to the Chrome/Chromium executable. Falls back to the
+        ``CHROME_BINARY`` environment variable, then Selenium's default.
+    chromedriver_path : str | None
+        Path to the chromedriver binary. Falls back to the
+        ``CHROMEDRIVER_PATH`` environment variable, then PATH / webdriver-manager.
     """
 
     def __init__(
@@ -89,7 +99,11 @@ class GoogleMapsReviewsScraper:
         page_load_timeout: int = 30,
         scroll_pause: float = 2.0,
         max_scrolls: int = 100,
+        chrome_binary: str | None = None,
+        chromedriver_path: str | None = None,
     ) -> None:
+        import os
+
         self.page_load_timeout = page_load_timeout
         self.scroll_pause = scroll_pause
         self.max_scrolls = max_scrolls
@@ -107,11 +121,12 @@ class GoogleMapsReviewsScraper:
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         )
-        import os
-        if os.path.isfile(_CHROMIUM_BINARY):
-            options.binary_location = _CHROMIUM_BINARY
 
-        service = _create_chrome_service()
+        binary = chrome_binary or os.environ.get("CHROME_BINARY")
+        if binary and os.path.isfile(binary):
+            options.binary_location = binary
+
+        service = _create_chrome_service(chromedriver_path)
         self.driver = webdriver.Chrome(service=service, options=options)
         self.driver.set_page_load_timeout(self.page_load_timeout)
 

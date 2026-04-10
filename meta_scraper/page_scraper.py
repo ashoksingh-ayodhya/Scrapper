@@ -159,11 +159,8 @@ class MetaPageScraper:
                 "type", "author", "text", "timestamp", "parent_author",
             ])
             for post in results:
-                preview = (
-                    (post.post_text[:100] + "…")
-                    if len(post.post_text) > 100
-                    else post.post_text
-                )
+                text = post.post_text or ""
+                preview = (text[:100] + "…") if len(text) > 100 else text
                 if not post.comments:
                     writer.writerow([
                         post.post_url, preview, post.post_timestamp,
@@ -202,7 +199,16 @@ class MetaPageScraper:
 
     @staticmethod
     def _normalise_page_id(page_id: str) -> str:
-        """Strip facebook.com URL down to just the page name/id."""
+        """Strip facebook.com URL down to a page identifier for get_posts().
+
+        Handles these URL shapes:
+        - https://www.facebook.com/C3Pay              → "C3Pay"
+        - https://www.facebook.com/profile.php?id=123 → "123"
+        - https://www.facebook.com/pages/Name/123     → "123"
+        - bare name or numeric ID passed directly     → unchanged
+        """
+        import urllib.parse
+
         for prefix in (
             "https://www.facebook.com/",
             "https://m.facebook.com/",
@@ -211,7 +217,20 @@ class MetaPageScraper:
         ):
             if page_id.startswith(prefix):
                 page_id = page_id[len(prefix):]
-        return page_id.strip("/").split("?")[0].split("/")[0]
+                break
+
+        # profile.php?id=<numeric_id>
+        if page_id.startswith("profile.php"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse("?" + page_id.split("?", 1)[-1]).query)
+            return qs.get("id", [page_id])[0]
+
+        # /pages/<slug>/<numeric_id>  → use the numeric id (last segment)
+        parts = page_id.strip("/").split("/")
+        if parts[0] == "pages" and len(parts) >= 3:
+            return parts[-1]
+
+        # Plain slug or numeric id
+        return parts[0].split("?")[0]
 
     def _build_post(self, raw: dict) -> PostWithComments:
         """Convert a raw facebook-scraper post dict to PostWithComments."""
@@ -219,8 +238,8 @@ class MetaPageScraper:
         ts_str = ts.isoformat() if ts else raw.get("timestamp", "")
 
         post = PostWithComments(
-            post_url=raw.get("post_url", raw.get("link", "")),
-            post_text=raw.get("text", raw.get("post_text", "")),
+            post_url=raw.get("post_url", raw.get("link", "")) or "",
+            post_text=raw.get("text", raw.get("post_text", "")) or "",
             post_timestamp=ts_str,
         )
 
