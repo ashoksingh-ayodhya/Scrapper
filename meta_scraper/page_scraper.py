@@ -28,7 +28,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 logger = logging.getLogger(__name__)
 
 _FB = "https://www.facebook.com"
-_POST_PATTERNS = ("/posts/", "/story.php?", "/permalink/")
+_POST_PATTERNS = ("/posts/", "/story.php?", "/permalink/", "/reel/", "/videos/", "/photos/")
 _SKIP_PATTERNS = ("action=like", "comment_id", "__mref", "reactioncount", "/shares")
 
 
