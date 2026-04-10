@@ -304,11 +304,14 @@ class MetaPageScraper:
     # Per-post comment scraping
     # ------------------------------------------------------------------
 
+    _debug_html_saved: bool = False
+
     def _scrape_post(self, post_url: str, timestamp: str) -> PostWithComments:
         result = PostWithComments(post_url=post_url, post_timestamp=timestamp)
         try:
             self.driver.get(post_url)
-            time.sleep(self.pause)
+            # Extra wait for reels which load heavier JS
+            time.sleep(self.pause + 2)
         except (TimeoutException, WebDriverException) as exc:
             logger.warning("Could not load %s: %s", post_url, exc)
             return result
@@ -321,6 +324,20 @@ class MetaPageScraper:
         self._load_all_comments()
 
         result.comments = self._extract_comments()
+
+        # Save debug HTML for the first post that yields 0 comments
+        if not result.comments and not MetaPageScraper._debug_html_saved:
+            try:
+                with open("debug_post_page.html", "w", encoding="utf-8") as fh:
+                    fh.write(self.driver.page_source)
+                logger.warning(
+                    "0 comments on %s — saved DOM to debug_post_page.html "
+                    "(share this file if comments are still missing)", post_url
+                )
+                MetaPageScraper._debug_html_saved = True
+            except Exception:
+                pass
+
         return result
 
     def _extract_post_text(self) -> str:
