@@ -45,8 +45,12 @@ def _run_facebook_page(args: argparse.Namespace) -> None:
         months=args.months,
         pages=args.max_pages,
         cookies=getattr(args, "cookies", None),
+        headless=not args.no_headless,
     )
-    results = scraper.scrape_page(args.url)
+    try:
+      results = scraper.scrape_page(args.url)
+    finally:
+      scraper.close()
     total_comments = sum(len(p.comments) for p in results)
     total_replies = sum(
         sum(len(c.replies) for c in p.comments) for p in results
@@ -171,6 +175,11 @@ def main() -> None:
         type=int,
         default=100,
         help="Max timeline pages to fetch (~10 posts each). Default: 100",
+    )
+    fbp_parser.add_argument(
+        "--no-headless",
+        action="store_true",
+        help="Show the browser window (helps debug cookie/login issues).",
     )
     fbp_parser.add_argument(
         "--cookies",
