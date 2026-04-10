@@ -337,6 +337,9 @@ class MetaPageScraper:
 
     def _load_all_comments(self) -> None:
         """Click 'View more comments' and reply expanders until exhausted."""
+        # Scroll any side comments panel first (reel/video pages)
+        self._scroll_comments_panel()
+
         for _ in range(50):
             clicked = False
             for btn in self.driver.find_elements(By.XPATH, "//div[@role='button']"):
@@ -365,21 +368,99 @@ class MetaPageScraper:
             except (StaleElementReferenceException, WebDriverException):
                 continue
 
+    def _scroll_comments_panel(self) -> None:
+        """Scroll the side comments panel if present (reel/video pages)."""
+        panel = None
+        for sel in [
+            "div[data-pagelet='MediaViewerComments']",
+            "div[aria-label='Comment list']",
+            "div[role='complementary']",
+        ]:
+            try:
+                for el in self.driver.find_elements(By.CSS_SELECTOR, sel):
+                    try:
+                        if self.driver.execute_script(
+                            "return arguments[0].scrollHeight > arguments[0].clientHeight;", el
+                        ):
+                            panel = el
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+            if panel:
+                break
+
+        if not panel:
+            return
+
+        logger.debug("Scrolling comments panel")
+        last_h = 0
+        for _ in range(30):
+            self.driver.execute_script(
+                "arguments[0].scrollTop = arguments[0].scrollHeight", panel
+            )
+            time.sleep(self.pause)
+            new_h = self.driver.execute_script("return arguments[0].scrollHeight", panel)
+            if new_h == last_h:
+                break
+            last_h = new_h
+
+    def _find_comment_elements(self):
+        """Try multiple strategies to locate comment elements on the page."""
+        # Strategy 1: nested articles — works for standard post pages
+        try:
+            nested = self.driver.find_elements(
+                By.XPATH, "//div[@role='article']//div[@role='article']"
+            )
+            if nested:
+                logger.debug("Comment strategy 1 (nested articles): %d", len(nested))
+                return nested
+        except Exception:
+            pass
+
+        # Strategy 2: all articles except the first — works for reel/video pages
+        # where the main reel is the first article and each comment is a sibling article
+        try:
+            all_arts = self.driver.find_elements(By.XPATH, "//div[@role='article']")
+            logger.debug("Total div[role='article']: %d", len(all_arts))
+            if len(all_arts) > 1:
+                logger.debug("Comment strategy 2 (all articles[1:]): %d", len(all_arts) - 1)
+                return all_arts[1:]
+        except Exception:
+            pass
+
+        # Strategy 3: elements aria-labelled as comments
+        try:
+            els = self.driver.find_elements(
+                By.XPATH,
+                "//*[contains(@aria-label,'Comment by') or contains(@aria-label,'comment by')]"
+            )
+            if els:
+                logger.debug("Comment strategy 3 (aria-label Comment by): %d", len(els))
+                return els
+        except Exception:
+            pass
+
+        # Strategy 4: data-comment-id containers
+        for sel in ("div[data-comment-id]", "li[data-comment-id]", "div[id^='comment_']"):
+            try:
+                els = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                if els:
+                    logger.debug("Comment strategy 4 (%s): %d", sel, len(els))
+                    return els
+            except Exception:
+                continue
+
+        logger.debug("No comment elements found with any strategy")
+        return []
+
     def _extract_comments(self) -> list[Comment]:
         """Extract all comments from the current post page."""
         comments: list[Comment] = []
         seen: set[str] = set()
 
-        # Comments on www.facebook.com are in nested div[role='article']
-        # The outermost article is the post; nested ones are comments/replies.
-        try:
-            # Find the comments section
-            comment_articles = self.driver.find_elements(
-                By.XPATH,
-                "//div[@role='article']//div[@role='article']",
-            )
-        except Exception:
-            return comments
+        comment_articles = self._find_comment_elements()
 
         for art in comment_articles:
             try:
