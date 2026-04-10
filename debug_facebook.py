@@ -1,4 +1,4 @@
-"""Debug: loads cookies, opens mbasic Facebook page, saves source + screenshot."""
+"""Debug: show all links and element counts on the mbasic page."""
 import sys, time
 from http.cookiejar import MozillaCookieJar
 from selenium import webdriver
@@ -10,8 +10,6 @@ cookies_file = sys.argv[1] if len(sys.argv) > 1 else "cookies.txt"
 page = sys.argv[2] if len(sys.argv) > 2 else "C3Pay"
 
 options = Options()
-# Run visible so you can see exactly what Chrome shows
-# options.add_argument("--headless=new")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
 options.add_argument("--disable-gpu")
@@ -37,7 +35,6 @@ driver = webdriver.Chrome(service=service, options=options)
 driver.set_page_load_timeout(30)
 
 try:
-    # Load cookies
     jar = MozillaCookieJar()
     jar.load(cookies_file, ignore_discard=True, ignore_expires=True)
     driver.get("https://www.facebook.com")
@@ -52,34 +49,45 @@ try:
                 })
             except Exception:
                 pass
-    print("Cookies loaded.")
 
-    # Navigate to mbasic page
     url = f"https://mbasic.facebook.com/{page}"
-    print(f"Loading: {url}")
     driver.get(url)
     time.sleep(4)
 
-    print(f"Current URL: {driver.current_url}")
-    print(f"Title: {driver.title}")
+    print(f"URL: {driver.current_url}")
+    print(f"Title: {driver.title}\n")
 
-    # Save source
-    src = driver.page_source
+    # Save full HTML
     with open("debug_fb_source.html", "w", encoding="utf-8") as f:
-        f.write(src)
-    driver.save_screenshot("debug_fb_screenshot.png")
-    print("Saved: debug_fb_source.html, debug_fb_screenshot.png")
+        f.write(driver.page_source)
+    print("Saved debug_fb_source.html\n")
 
-    # Print element counts
-    for sel in ["article", "div[data-ft]", "div[data-store]", "div[role='article']"]:
-        els = driver.find_elements(By.CSS_SELECTOR, sel)
-        print(f"  {sel}: {len(els)} elements")
+    # Element counts
+    for sel in ["article", "div[data-ft]", "div[data-store]",
+                "div[role='article']", "div._5pcr", "div.du"]:
+        print(f"  {sel}: {len(driver.find_elements(By.CSS_SELECTOR, sel))}")
 
-    # Print first 3000 chars of body text
-    body = driver.find_element(By.TAG_NAME, "body").text
-    print("\n--- PAGE TEXT (first 2000 chars) ---")
-    print(body[:2000])
+    # All hrefs that look like post links
+    print("\n--- POST-LIKE LINKS ---")
+    for a in driver.find_elements(By.TAG_NAME, "a"):
+        try:
+            href = a.get_attribute("href") or ""
+            text = a.text.strip()
+            if any(p in href for p in ["/story.php", "/posts/", "/permalink", "/videos/", "/photos/"]):
+                print(f"  [{text[:40]}] -> {href[:100]}")
+        except Exception:
+            pass
+
+    # All links with "Full Story" or "See"
+    print("\n--- FULL STORY / SEE MORE LINKS ---")
+    for a in driver.find_elements(By.TAG_NAME, "a"):
+        try:
+            text = a.text.strip().lower()
+            if any(k in text for k in ["full story", "see more", "view post", "more post"]):
+                print(f"  [{a.text.strip()}] -> {a.get_attribute('href')}")
+        except Exception:
+            pass
 
 finally:
-    input("\nPress Enter to close browser...")
+    input("\nPress Enter to close...")
     driver.quit()
