@@ -28,9 +28,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 logger = logging.getLogger(__name__)
 
 _FB = "https://www.facebook.com"
-_POST_PATTERNS = ("/posts/", "/story.php", "/permalink/", "/videos/", "/photos/")
-_SKIP_PATTERNS = ("action=like", "comment_id", "__mref", "reactioncount",
-                  "/shares", "share_id", "?ref=", "notifications")
+_POST_PATTERNS = ("/posts/", "/story.php?", "/permalink/")
+_SKIP_PATTERNS = ("action=like", "comment_id", "__mref", "reactioncount", "/shares")
 
 
 # ---------------------------------------------------------------------------
@@ -242,95 +241,62 @@ class MetaPageScraper:
     # ------------------------------------------------------------------
 
     def _collect_post_links(self) -> list[tuple[str, str]]:
-        """Scroll the timeline and collect post URLs within the date window."""
+        """Scroll the timeline and collect post URLs."""
         seen: set[str] = set()
         results: list[tuple[str, str]] = []
-        hit_cutoff = False
 
         for scroll_n in range(self.pages):
-            new, hit_cutoff = self._extract_post_links_from_page(seen)
+            new = self._scrape_links_from_page(seen)
             results.extend(new)
-            logger.info("Scroll %d: +%d posts (total %d)", scroll_n + 1, len(new), len(results))
+            logger.info("Scroll %d: +%d new posts (total %d)",
+                        scroll_n + 1, len(new), len(results))
 
-            if hit_cutoff:
-                logger.info("Reached date cutoff — stopping timeline scroll")
-                break
-
-            # Scroll down to load more posts
-            prev_height = self.driver.execute_script("return document.body.scrollHeight")
+            prev_h = self.driver.execute_script("return document.body.scrollHeight")
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(self.pause)
-            new_height = self.driver.execute_script("return document.body.scrollHeight")
+            new_h = self.driver.execute_script("return document.body.scrollHeight")
 
-            if new_height == prev_height:
-                logger.info("No more posts to load after scroll %d", scroll_n + 1)
+            if new_h == prev_h:
+                logger.info("No more content after scroll %d", scroll_n + 1)
                 break
 
         return results
 
-    def _extract_post_links_from_page(
-        self, seen: set[str]
-    ) -> tuple[list[tuple[str, str]], bool]:
-        posts: list[tuple[str, str]] = []
-        hit_cutoff = False
+    def _scrape_links_from_page(self, seen: set[str]) -> list[tuple[str, str]]:
+        """Grab every post-pattern link visible on the current page."""
+        found: list[tuple[str, str]] = []
 
-        # Each post on the timeline is a div[role='article']
-        articles = self.driver.find_elements(By.CSS_SELECTOR, "div[role='article']")
-
-        for art in articles:
-            url, ts, dt = self._post_info_from_article(art)
-            if not url or url in seen:
-                continue
-            seen.add(url)
-
-            # Check cutoff
-            if dt and dt < self._cutoff:
-                hit_cutoff = True
-                continue
-            posts.append((url, ts))
-
-        return posts, hit_cutoff
-
-    def _post_info_from_article(self, art) -> tuple[str, str, datetime | None]:
-        """Return (post_url, timestamp_str, datetime) from a post article."""
-        url = ""
-        ts = ""
-        dt = None
-
-        try:
-            links = art.find_elements(By.TAG_NAME, "a")
-            for link in links:
+        for link in self.driver.find_elements(By.TAG_NAME, "a"):
+            try:
                 href = link.get_attribute("href") or ""
+                if not href:
+                    continue
                 if not any(p in href for p in _POST_PATTERNS):
                     continue
                 if any(s in href for s in _SKIP_PATTERNS):
                     continue
 
-                # Prefer links that contain a <time> element (timestamp links)
-                times = link.find_elements(By.TAG_NAME, "time")
-                if times:
-                    ts = times[0].text.strip()
-                    dt_str = times[0].get_attribute("datetime") or ""
-                    if dt_str:
-                        try:
-                            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-                        except ValueError:
-                            pass
-                    url = href
-                    break
+                # Normalise: strip query string for dedup, keep full URL for visiting
+                base = href.split("?")[0].rstrip("/")
+                if base in seen:
+                    continue
+                seen.add(base)
 
-                # Fall back: any post-pattern link
-                if not url:
-                    url = href
+                # Try to get a timestamp from a nearby <time> element
+                ts = ""
+                try:
+                    time_el = link.find_element(By.TAG_NAME, "time")
+                    ts = (time_el.get_attribute("datetime") or time_el.text or "").strip()
+                except NoSuchElementException:
+                    pass
 
-        except (StaleElementReferenceException, WebDriverException):
-            pass
+                logger.debug("Post link: %s  ts=%s", base, ts or "(none)")
+                found.append((href, ts))
 
-        # Ensure absolute URL
-        if url and not url.startswith("http"):
-            url = _FB + url
+            except (StaleElementReferenceException, WebDriverException):
+                continue
 
-        return url, ts, dt
+        return found
 
     # ------------------------------------------------------------------
     # Per-post comment scraping
