@@ -1,16 +1,7 @@
-"""Facebook / Meta Page Scraper — Selenium + mbasic.facebook.com.
+"""Facebook Page Scraper — Selenium + www.facebook.com.
 
-Uses a real Chrome browser (via Selenium) with an optional cookies file
-so Facebook accepts the session. mbasic.facebook.com returns plain HTML
-which is far easier to parse than the React-heavy main site.
-
-Usage:
-    from meta_scraper.page_scraper import MetaPageScraper
-
-    scraper = MetaPageScraper(months=12, cookies="cookies.txt")
-    results = scraper.scrape_page("https://www.facebook.com/C3Pay")
-    scraper.save_to_csv(results, "c3pay_comments.csv")
-    scraper.close()
+mbasic.facebook.com now redirects to the main site, so this scraper
+works directly against www.facebook.com using a logged-in cookies.txt.
 """
 
 import csv
@@ -31,11 +22,20 @@ from selenium.common.exceptions import (
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 logger = logging.getLogger(__name__)
 
-_MBASIC = "https://mbasic.facebook.com"
+_FB = "https://www.facebook.com"
+_POST_PATTERNS = ("/posts/", "/story.php", "/permalink/", "/videos/", "/photos/")
+_SKIP_PATTERNS = ("action=like", "comment_id", "__mref", "reactioncount",
+                  "/shares", "share_id", "?ref=", "notifications")
 
+
+# ---------------------------------------------------------------------------
+# Driver setup
+# ---------------------------------------------------------------------------
 
 def _make_driver(headless: bool = True) -> webdriver.Chrome:
     options = Options()
@@ -49,10 +49,8 @@ def _make_driver(headless: bool = True) -> webdriver.Chrome:
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     )
-
     try:
         import shutil
         if shutil.which("chromedriver"):
@@ -69,41 +67,38 @@ def _make_driver(headless: bool = True) -> webdriver.Chrome:
 
 
 def _load_cookies(driver: webdriver.Chrome, cookies_file: str) -> None:
-    """Load a Netscape cookies.txt file into the browser."""
     jar = MozillaCookieJar()
     try:
         jar.load(cookies_file, ignore_discard=True, ignore_expires=True)
     except Exception as exc:
-        logger.warning("Could not load cookies file: %s", exc)
+        logger.warning("Could not load cookies: %s", exc)
         return
 
-    # Selenium requires a page to be loaded before cookies can be added.
-    # Navigate to facebook.com first so the domain matches.
-    driver.get("https://www.facebook.com")
-    time.sleep(2)
+    driver.get(_FB)
+    time.sleep(3)
 
     added = 0
-    for cookie in jar:
-        if "facebook.com" not in cookie.domain:
+    for c in jar:
+        if "facebook.com" not in c.domain:
             continue
-        entry: dict = {
-            "name": cookie.name,
-            "value": cookie.value,
-            "path": cookie.path,
-            "secure": bool(cookie.secure),
-            # Strip leading dot so Selenium accepts the domain
-            "domain": cookie.domain.lstrip("."),
+        entry = {
+            "name": c.name, "value": c.value,
+            "path": c.path, "secure": bool(c.secure),
+            "domain": c.domain.lstrip("."),
         }
-        if cookie.expires:
-            entry["expiry"] = cookie.expires
+        if c.expires:
+            entry["expiry"] = c.expires
         try:
             driver.add_cookie(entry)
             added += 1
         except Exception:
             pass
+    logger.info("Loaded %d cookies", added)
 
-    logger.info("Loaded %d cookies from %s", added, cookies_file)
 
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
 
 @dataclass
 class Reply:
@@ -128,6 +123,10 @@ class PostWithComments:
     comments: list[Comment] = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Scraper
+# ---------------------------------------------------------------------------
+
 class MetaPageScraper:
     """Scrape posts, comments and replies from a public Facebook page.
 
@@ -136,13 +135,13 @@ class MetaPageScraper:
     months : int
         Only include posts from the last *months* months (default 12).
     pages : int
-        Max timeline pages to traverse (default 100).
+        Max number of scroll-loads on the timeline (default 100).
     cookies : str | None
-        Path to a Netscape cookies.txt file. Required for most pages.
+        Path to a Netscape cookies.txt file. Required.
     headless : bool
         Run Chrome without a visible window (default True).
     pause : float
-        Seconds to wait after each page load (default 2.5).
+        Seconds to wait after each page/scroll action (default 3).
     """
 
     def __init__(
@@ -152,7 +151,7 @@ class MetaPageScraper:
         pages: int = 100,
         cookies: str | None = None,
         headless: bool = True,
-        pause: float = 2.5,
+        pause: float = 3.0,
     ) -> None:
         self.months = months
         self.pages = pages
@@ -163,9 +162,6 @@ class MetaPageScraper:
 
         if cookies:
             _load_cookies(self.driver, cookies)
-            # Re-navigate to mbasic after setting cookies
-            self.driver.get(_MBASIC)
-            time.sleep(self.pause)
 
     def close(self) -> None:
         self.driver.quit()
@@ -176,27 +172,35 @@ class MetaPageScraper:
 
     def scrape_page(self, page_id: str) -> list[PostWithComments]:
         page_id = _normalise_page_id(page_id)
-        start_url = f"{_MBASIC}/{page_id}"
-        logger.info("Scraping %s (last %d months)", start_url, self.months)
+        page_url = f"{_FB}/{page_id}"
+        logger.info("Loading timeline: %s", page_url)
 
-        post_links = self._collect_post_links(start_url)
+        self.driver.get(page_url)
+        time.sleep(self.pause)
+
+        if self._is_login_page():
+            raise RuntimeError(
+                "Redirected to login — cookies are missing or expired. "
+                "Re-export cookies.txt from a logged-in Chrome session."
+            )
+
+        # Dismiss any popups (cookie consent, notifications, etc.)
+        self._dismiss_popups()
+
+        # Collect all post URLs by scrolling the timeline
+        post_links = self._collect_post_links()
         logger.info("Found %d post(s) in date window", len(post_links))
 
         results: list[PostWithComments] = []
         for i, (url, ts) in enumerate(post_links, 1):
-            logger.info("[%d/%d] Scraping post: %s", i, len(post_links), url)
+            logger.info("[%d/%d] %s", i, len(post_links), url)
             post = self._scrape_post(url, ts)
             results.append(post)
             logger.info("  → %d comment(s)", len(post.comments))
 
-        total_comments = sum(len(p.comments) for p in results)
-        total_replies = sum(
-            sum(len(c.replies) for c in p.comments) for p in results
-        )
-        logger.info(
-            "Done: %d post(s), %d comment(s), %d reply/replies",
-            len(results), total_comments, total_replies,
-        )
+        nc = sum(len(p.comments) for p in results)
+        nr = sum(sum(len(c.replies) for c in p.comments) for p in results)
+        logger.info("Done: %d posts, %d comments, %d replies", len(results), nc, nr)
         return results
 
     # ------------------------------------------------------------------
@@ -215,148 +219,118 @@ class MetaPageScraper:
                 text = post.post_text or ""
                 preview = (text[:100] + "…") if len(text) > 100 else text
                 if not post.comments:
-                    w.writerow([
-                        post.post_url, preview, post.post_timestamp,
-                        "post", "", text, post.post_timestamp, "",
-                    ])
+                    w.writerow([post.post_url, preview, post.post_timestamp,
+                                "post", "", text, post.post_timestamp, ""])
                 for comment in post.comments:
-                    w.writerow([
-                        post.post_url, preview, post.post_timestamp,
-                        "comment", comment.author, comment.text,
-                        comment.timestamp, "",
-                    ])
+                    w.writerow([post.post_url, preview, post.post_timestamp,
+                                "comment", comment.author, comment.text,
+                                comment.timestamp, ""])
                     for reply in comment.replies:
-                        w.writerow([
-                            post.post_url, preview, post.post_timestamp,
-                            "reply", reply.author, reply.text,
-                            reply.timestamp, comment.author,
-                        ])
-        logger.info("Saved to %s", filepath)
+                        w.writerow([post.post_url, preview, post.post_timestamp,
+                                    "reply", reply.author, reply.text,
+                                    reply.timestamp, comment.author])
+        logger.info("Saved → %s", filepath)
 
     @staticmethod
     def save_to_json(results: list[PostWithComments], filepath: str) -> None:
         with open(filepath, "w", encoding="utf-8") as fh:
             json.dump([asdict(p) for p in results], fh, ensure_ascii=False, indent=2)
-        logger.info("Saved to %s", filepath)
+        logger.info("Saved → %s", filepath)
 
     # ------------------------------------------------------------------
-    # Timeline crawl
+    # Timeline scraping
     # ------------------------------------------------------------------
 
-    def _collect_post_links(self, start_url: str) -> list[tuple[str, str]]:
-        posts: list[tuple[str, str]] = []
+    def _collect_post_links(self) -> list[tuple[str, str]]:
+        """Scroll the timeline and collect post URLs within the date window."""
         seen: set[str] = set()
-        current_url = start_url
+        results: list[tuple[str, str]] = []
+        hit_cutoff = False
 
-        for page_num in range(self.pages):
-            logger.debug("Timeline page %d: %s", page_num + 1, current_url)
-            self._get(current_url)
-
-            if self._is_login_page():
-                logger.error(
-                    "Redirected to login. Re-export cookies.txt from a logged-in Chrome session."
-                )
-                break
-
-            new_posts, hit_cutoff = self._parse_timeline_page(seen)
-            posts.extend(new_posts)
-            logger.info("Page %d: +%d posts (total %d)", page_num + 1, len(new_posts), len(posts))
+        for scroll_n in range(self.pages):
+            new, hit_cutoff = self._extract_post_links_from_page(seen)
+            results.extend(new)
+            logger.info("Scroll %d: +%d posts (total %d)", scroll_n + 1, len(new), len(results))
 
             if hit_cutoff:
-                logger.info("Reached cutoff date at page %d", page_num + 1)
+                logger.info("Reached date cutoff — stopping timeline scroll")
                 break
 
-            nxt = self._next_timeline_page()
-            if not nxt:
-                logger.info("No more timeline pages after page %d", page_num + 1)
+            # Scroll down to load more posts
+            prev_height = self.driver.execute_script("return document.body.scrollHeight")
+            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(self.pause)
+            new_height = self.driver.execute_script("return document.body.scrollHeight")
+
+            if new_height == prev_height:
+                logger.info("No more posts to load after scroll %d", scroll_n + 1)
                 break
-            current_url = nxt
 
-        return posts
+        return results
 
-    def _parse_timeline_page(self, seen: set[str]) -> tuple[list[tuple[str, str]], bool]:
-        """Collect post URLs from the current timeline page.
-
-        Strategy: find every <a> whose href contains a post URL pattern.
-        We don't rely on any container element (article, div[data-ft], etc.)
-        because mbasic's markup changes frequently.
-        """
+    def _extract_post_links_from_page(
+        self, seen: set[str]
+    ) -> tuple[list[tuple[str, str]], bool]:
         posts: list[tuple[str, str]] = []
         hit_cutoff = False
 
-        _POST_PATTERNS = ("/story.php", "/posts/", "/permalink/", "/videos/", "/photos/")
+        # Each post on the timeline is a div[role='article']
+        articles = self.driver.find_elements(By.CSS_SELECTOR, "div[role='article']")
 
-        # Gather all candidate links: "Full Story" text takes priority,
-        # then any href matching a post URL pattern.
-        candidates: list[tuple[str, str]] = []  # (href, nearby_ts)
-
-        all_links = self.driver.find_elements(By.TAG_NAME, "a")
-        for link in all_links:
-            try:
-                href = link.get_attribute("href") or ""
-                text = link.text.strip().lower()
-
-                # Skip non-post links
-                if not any(p in href for p in _POST_PATTERNS):
-                    continue
-                # Skip action/reaction links (like, share, comment)
-                if any(skip in href for skip in ("action=like", "comment_id", "__mref")):
-                    continue
-
-                # Try to grab a nearby timestamp (<abbr> sibling or parent)
-                ts = ""
-                try:
-                    parent = link.find_element(By.XPATH, "./ancestor::div[1]")
-                    abbrs = parent.find_elements(By.TAG_NAME, "abbr")
-                    if abbrs:
-                        ts = abbrs[0].text.strip()
-                except Exception:
-                    pass
-
-                candidates.append((href, ts))
-            except (StaleElementReferenceException, WebDriverException):
+        for art in articles:
+            url, ts, dt = self._post_info_from_article(art)
+            if not url or url in seen:
                 continue
+            seen.add(url)
 
-        # Deduplicate preserving order
-        for href, ts in candidates:
-            # Normalise to mbasic URL
-            if href.startswith("https://www.facebook.com"):
-                href = href.replace("https://www.facebook.com", _MBASIC, 1)
-            elif href.startswith("https://m.facebook.com"):
-                href = href.replace("https://m.facebook.com", _MBASIC, 1)
-            elif not href.startswith("http"):
-                href = _MBASIC + href
-
-            if href in seen:
-                continue
-            seen.add(href)
-
-            if ts and _is_too_old(ts, self._cutoff):
+            # Check cutoff
+            if dt and dt < self._cutoff:
                 hit_cutoff = True
                 continue
-
-            posts.append((href, ts))
+            posts.append((url, ts))
 
         return posts, hit_cutoff
 
-    def _next_timeline_page(self) -> str | None:
-        for link in self.driver.find_elements(By.TAG_NAME, "a"):
-            try:
-                text = link.text.strip().lower()
+    def _post_info_from_article(self, art) -> tuple[str, str, datetime | None]:
+        """Return (post_url, timestamp_str, datetime) from a post article."""
+        url = ""
+        ts = ""
+        dt = None
+
+        try:
+            links = art.find_elements(By.TAG_NAME, "a")
+            for link in links:
                 href = link.get_attribute("href") or ""
-                if any(k in text for k in ("see more post", "show more", "more post", "older post")):
-                    return href if href.startswith("http") else _MBASIC + href
-                # mbasic uses a div#m_more_item wrapper
-                if "m_more_item" in (link.get_attribute("id") or ""):
-                    return href if href.startswith("http") else _MBASIC + href
-            except (StaleElementReferenceException, WebDriverException):
-                continue
-        # Also check by id
-        for el in self.driver.find_elements(By.CSS_SELECTOR, "div#m_more_item a, #see_older_threads a"):
-            href = el.get_attribute("href") or ""
-            if href:
-                return href if href.startswith("http") else _MBASIC + href
-        return None
+                if not any(p in href for p in _POST_PATTERNS):
+                    continue
+                if any(s in href for s in _SKIP_PATTERNS):
+                    continue
+
+                # Prefer links that contain a <time> element (timestamp links)
+                times = link.find_elements(By.TAG_NAME, "time")
+                if times:
+                    ts = times[0].text.strip()
+                    dt_str = times[0].get_attribute("datetime") or ""
+                    if dt_str:
+                        try:
+                            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                        except ValueError:
+                            pass
+                    url = href
+                    break
+
+                # Fall back: any post-pattern link
+                if not url:
+                    url = href
+
+        except (StaleElementReferenceException, WebDriverException):
+            pass
+
+        # Ensure absolute URL
+        if url and not url.startswith("http"):
+            url = _FB + url
+
+        return url, ts, dt
 
     # ------------------------------------------------------------------
     # Per-post comment scraping
@@ -364,149 +338,167 @@ class MetaPageScraper:
 
     def _scrape_post(self, post_url: str, timestamp: str) -> PostWithComments:
         result = PostWithComments(post_url=post_url, post_timestamp=timestamp)
-        self._get(post_url)
+        try:
+            self.driver.get(post_url)
+            time.sleep(self.pause)
+        except (TimeoutException, WebDriverException) as exc:
+            logger.warning("Could not load %s: %s", post_url, exc)
+            return result
+
+        self._dismiss_popups()
 
         result.post_text = self._extract_post_text()
 
-        for _ in range(50):  # up to 50 comment pages
-            comments = self._extract_comments()
-            result.comments.extend(comments)
-            if not self._click_more_comments():
-                break
-            time.sleep(self.pause)
+        # Expand all comments
+        self._load_all_comments()
 
+        result.comments = self._extract_comments()
         return result
 
     def _extract_post_text(self) -> str:
-        for sel in ("div.story_body_container p", "div[data-ft] p", "div.msg p"):
+        """Get the main post body text."""
+        for sel in (
+            "div[data-ad-comet-preview='message']",
+            "div[data-ad-preview='message']",
+            "div[role='article'] div[dir='auto']",
+        ):
             els = self.driver.find_elements(By.CSS_SELECTOR, sel)
             if els:
-                return " ".join(e.text.strip() for e in els if e.text.strip())
+                return " ".join(e.text.strip() for e in els[:3] if e.text.strip())
         return ""
 
+    def _load_all_comments(self) -> None:
+        """Click 'View more comments' and reply expanders until exhausted."""
+        for _ in range(50):
+            clicked = False
+            for btn in self.driver.find_elements(By.XPATH, "//div[@role='button']"):
+                try:
+                    t = btn.text.strip().lower()
+                    if any(k in t for k in (
+                        "view more comments", "view previous comments",
+                        "more comments", "all comments",
+                    )):
+                        btn.click()
+                        time.sleep(self.pause)
+                        clicked = True
+                        break
+                except (StaleElementReferenceException, WebDriverException):
+                    continue
+            if not clicked:
+                break
+
+        # Expand "View more replies" within comment threads
+        for btn in self.driver.find_elements(By.XPATH, "//div[@role='button']"):
+            try:
+                t = btn.text.strip().lower()
+                if "repl" in t and ("view" in t or "more" in t):
+                    btn.click()
+                    time.sleep(1.5)
+            except (StaleElementReferenceException, WebDriverException):
+                continue
+
     def _extract_comments(self) -> list[Comment]:
+        """Extract all comments from the current post page."""
         comments: list[Comment] = []
         seen: set[str] = set()
 
-        # Strategy 1: classic mbasic ufi_ container
-        containers = self.driver.find_elements(
-            By.CSS_SELECTOR, "div[id^='ufi_'] > div > div"
-        )
-        # Strategy 2: any div that has an abbr (timestamp) — covers newer mbasic
-        if not containers:
-            containers = [
-                div for div in self.driver.find_elements(By.XPATH,
-                    "//div[.//abbr and .//a and not(ancestor::div[starts-with(@id,'ufi_')])]")
-            ]
+        # Comments on www.facebook.com are in nested div[role='article']
+        # The outermost article is the post; nested ones are comments/replies.
+        try:
+            # Find the comments section
+            comment_articles = self.driver.find_elements(
+                By.XPATH,
+                "//div[@role='article']//div[@role='article']",
+            )
+        except Exception:
+            return comments
 
-        for div in containers:
-            c = self._parse_comment_div(div)
-            if c and c.text and c.text not in seen:
-                seen.add(c.text)
-                c.replies = self._extract_replies(div)
+        for art in comment_articles:
+            try:
+                c = self._parse_comment_article(art)
+                if not c or not c.text:
+                    continue
+                key = f"{c.author}::{c.text[:50]}"
+                if key in seen:
+                    continue
+                seen.add(key)
                 comments.append(c)
+            except (StaleElementReferenceException, WebDriverException):
+                continue
 
         return comments
 
-    def _parse_comment_div(self, div) -> Comment | None:
+    def _parse_comment_article(self, art) -> Comment | None:
+        """Parse a comment article element into a Comment."""
         try:
+            # Author: first link inside the article that contains a person name
             author = ""
-            try:
-                author = div.find_element(By.CSS_SELECTOR, "a").text.strip()
-            except NoSuchElementException:
-                pass
-
-            raw = div.text.strip()
-            if author and raw.startswith(author):
-                raw = raw[len(author):].strip()
-
-            ts = ""
-            try:
-                ts = div.find_element(By.CSS_SELECTOR, "abbr").text.strip()
-            except NoSuchElementException:
-                pass
-
-            if not raw:
-                return None
-            return Comment(author=author, text=raw, timestamp=ts)
-        except StaleElementReferenceException:
-            return None
-
-    def _extract_replies(self, comment_div) -> list[Reply]:
-        replies: list[Reply] = []
-        seen: set[str] = set()
-        try:
-            for link in comment_div.find_elements(By.XPATH, ".//a"):
-                if "repl" in link.text.lower():
-                    link.click()
-                    time.sleep(self.pause)
+            links = art.find_elements(By.TAG_NAME, "a")
+            for link in links:
+                t = link.text.strip()
+                href = link.get_attribute("href") or ""
+                # Profile links don't have post-pattern paths
+                if t and not any(p in href for p in _POST_PATTERNS):
+                    author = t
                     break
 
-            for rdiv in comment_div.find_elements(By.CSS_SELECTOR, "div div div"):
-                r = self._parse_reply_div(rdiv)
-                if r and r.text and r.text not in seen:
-                    seen.add(r.text)
-                    replies.append(r)
-        except (NoSuchElementException, StaleElementReferenceException, TimeoutException):
-            pass
-        return replies
-
-    def _parse_reply_div(self, div) -> Reply | None:
-        try:
-            author = ""
-            try:
-                author = div.find_element(By.CSS_SELECTOR, "a").text.strip()
-            except NoSuchElementException:
-                pass
-            raw = div.text.strip()
-            if author and raw.startswith(author):
-                raw = raw[len(author):].strip()
+            # Timestamp: <abbr> or <time> element
             ts = ""
-            try:
-                ts = div.find_element(By.CSS_SELECTOR, "abbr").text.strip()
-            except NoSuchElementException:
-                pass
-            if not raw:
-                return None
-            return Reply(author=author, text=raw, timestamp=ts)
-        except StaleElementReferenceException:
-            return None
+            for sel in ("abbr", "time"):
+                els = art.find_elements(By.TAG_NAME, sel)
+                if els:
+                    ts = (els[0].get_attribute("datetime") or els[0].text or "").strip()
+                    break
 
-    def _click_more_comments(self) -> bool:
-        for el in self.driver.find_elements(By.XPATH, "//a"):
-            try:
-                t = el.text.strip().lower()
-                if "more comment" in t or "view previous" in t:
-                    el.click()
-                    return True
-            except (StaleElementReferenceException, WebDriverException):
-                continue
-        return False
+            # Text: grab all dir='auto' spans/divs, skip the author name
+            text_parts = []
+            for el in art.find_elements(By.CSS_SELECTOR, "div[dir='auto'], span[dir='auto']"):
+                t = el.text.strip()
+                if t and t != author:
+                    text_parts.append(t)
+
+            # Deduplicate consecutive equal parts
+            text = " ".join(dict.fromkeys(text_parts))
+
+            if not text and not author:
+                return None
+
+            return Comment(author=author, text=text, timestamp=ts)
+        except (StaleElementReferenceException, WebDriverException):
+            return None
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _get(self, url: str) -> None:
-        try:
-            self.driver.get(url)
-        except TimeoutException:
-            logger.warning("Timeout loading %s", url)
-        time.sleep(self.pause)
+    def _dismiss_popups(self) -> None:
+        """Close cookie consent and notification dialogs if present."""
+        for xpath in (
+            "//div[@aria-label='Close']",
+            "//button[contains(text(),'Not now')]",
+            "//button[contains(text(),'Allow')]",
+            "//button[@data-cookiebanner='accept_button']",
+        ):
+            try:
+                btn = WebDriverWait(self.driver, 2).until(
+                    EC.element_to_be_clickable((By.XPATH, xpath))
+                )
+                btn.click()
+                time.sleep(1)
+            except (TimeoutException, NoSuchElementException, WebDriverException):
+                pass
 
     def _is_login_page(self) -> bool:
         cur = self.driver.current_url
         return any(p in cur for p in ("/login", "/checkpoint", "login.php"))
 
 
-# ------------------------------------------------------------------
-# Module-level helpers
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _normalise_page_id(page_id: str) -> str:
-    """Return just the slug or numeric ID from any Facebook URL."""
     import urllib.parse
-
     for prefix in (
         "https://www.facebook.com/",
         "https://m.facebook.com/",
@@ -526,26 +518,3 @@ def _normalise_page_id(page_id: str) -> str:
         return parts[-1]
 
     return parts[0].split("?")[0]
-
-
-def _is_too_old(timestamp_text: str, cutoff: datetime) -> bool:
-    """Return True if a relative timestamp string is before *cutoff*."""
-    units = {
-        "min": 1/1440, "mins": 1/1440,
-        "hr": 1/24, "hrs": 1/24, "hour": 1/24, "hours": 1/24,
-        "day": 1, "days": 1,
-        "wk": 7, "wks": 7, "week": 7, "weeks": 7,
-        "mo": 30, "mos": 30, "month": 30, "months": 30,
-        "yr": 365, "yrs": 365, "year": 365, "years": 365,
-    }
-    import re
-    text = timestamp_text.lower().strip()
-    if text in ("just now", "now"):
-        return False
-    m = re.match(r"(\d+)\s*(\w+)", text)
-    if not m:
-        return False
-    value, unit = int(m.group(1)), m.group(2).rstrip(".")
-    days = value * units.get(unit, 0)
-    cutoff_days = (datetime.now(tz=timezone.utc) - cutoff).days
-    return days > cutoff_days
