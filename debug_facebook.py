@@ -1,4 +1,4 @@
-"""Debug: show all links and element counts on the mbasic page."""
+"""Debug: print every href on the C3Pay Facebook page."""
 import sys, time
 from http.cookiejar import MozillaCookieJar
 from selenium import webdriver
@@ -50,41 +50,25 @@ try:
             except Exception:
                 pass
 
-    url = f"https://mbasic.facebook.com/{page}"
-    driver.get(url)
-    time.sleep(4)
+    driver.get(f"https://www.facebook.com/{page}")
+    time.sleep(5)
 
     print(f"URL: {driver.current_url}")
-    print(f"Title: {driver.title}\n")
 
     # Save full HTML
     with open("debug_fb_source.html", "w", encoding="utf-8") as f:
         f.write(driver.page_source)
     print("Saved debug_fb_source.html\n")
 
-    # Element counts
-    for sel in ["article", "div[data-ft]", "div[data-store]",
-                "div[role='article']", "div._5pcr", "div.du"]:
-        print(f"  {sel}: {len(driver.find_elements(By.CSS_SELECTOR, sel))}")
-
-    # All hrefs that look like post links
-    print("\n--- POST-LIKE LINKS ---")
+    # Print ALL unique hrefs
+    print("=== ALL HREFS ON PAGE ===")
+    hrefs = set()
     for a in driver.find_elements(By.TAG_NAME, "a"):
         try:
-            href = a.get_attribute("href") or ""
-            text = a.text.strip()
-            if any(p in href for p in ["/story.php", "/posts/", "/permalink", "/videos/", "/photos/"]):
-                print(f"  [{text[:40]}] -> {href[:100]}")
-        except Exception:
-            pass
-
-    # All links with "Full Story" or "See"
-    print("\n--- FULL STORY / SEE MORE LINKS ---")
-    for a in driver.find_elements(By.TAG_NAME, "a"):
-        try:
-            text = a.text.strip().lower()
-            if any(k in text for k in ["full story", "see more", "view post", "more post"]):
-                print(f"  [{a.text.strip()}] -> {a.get_attribute('href')}")
+            h = a.get_attribute("href") or ""
+            if h and h not in hrefs:
+                hrefs.add(h)
+                print(h)
         except Exception:
             pass
 
