@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
+import { MONO_FONT_URL } from '@/lib/assets';
 import type { Group } from 'three';
 
-const FONT_URL = '/fonts/jetbrains-mono-400.woff';
+const FONT_URL = MONO_FONT_URL;
 
 interface Burst {
   key: number;

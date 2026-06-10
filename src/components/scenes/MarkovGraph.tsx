@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
+import { MONO_FONT_URL } from '@/lib/assets';
 import * as THREE from 'three';
 import type { SceneProps } from './registry';
 import { readVelocity } from './lib/velocity';
@@ -134,7 +135,7 @@ export default function MarkovGraph({ accent, ambient }: SceneProps) {
         <pointsMaterial size={0.1} color="#ffffff" transparent opacity={0.8} depthWrite={false} />
       </points>
       <Text
-        font="/fonts/jetbrains-mono-400.woff"
+        font={MONO_FONT_URL}
         fontSize={0.5}
         color={accent}
         anchorX="center"
