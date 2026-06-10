@@ -47,3 +47,23 @@ export const ACCENT_BORDER: Record<Accent, string> = {
   violet: 'border-violet/40',
   gold: 'border-gold/40',
 };
+
+// Glow halo for "this is live + interactive" framing around scene/glass cards.
+export const ACCENT_GLOW: Record<Accent, string> = {
+  plasma: 'shadow-[0_0_140px_-40px_rgba(51,235,255,0.65)]',
+  solar: 'shadow-[0_0_140px_-40px_rgba(255,126,41,0.65)]',
+  acid: 'shadow-[0_0_140px_-40px_rgba(43,238,108,0.65)]',
+  magenta: 'shadow-[0_0_140px_-40px_rgba(250,66,189,0.65)]',
+  violet: 'shadow-[0_0_140px_-40px_rgba(173,100,247,0.65)]',
+  gold: 'shadow-[0_0_140px_-40px_rgba(250,192,56,0.65)]',
+};
+
+// Ring outline used to frame the live-simulation canvases / glass cards.
+export const ACCENT_RING: Record<Accent, string> = {
+  plasma: 'ring-1 ring-plasma/35',
+  solar: 'ring-1 ring-solar/35',
+  acid: 'ring-1 ring-acid/35',
+  magenta: 'ring-1 ring-magenta/35',
+  violet: 'ring-1 ring-violet/35',
+  gold: 'ring-1 ring-gold/35',
+};
