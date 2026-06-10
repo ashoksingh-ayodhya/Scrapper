@@ -15,7 +15,10 @@
   body,
   #root {
     @apply bg-background text-foreground;
-    background: linear-gradient(180deg, hsl(230 40% 3%) 0%, hsl(230 50% 2%) 100%);
+    /* background-image only: the shorthand would reset background-color to
+       transparent, exposing white during fast-scroll paint gaps. */
+    background-color: hsl(230 50% 2%);
+    background-image: linear-gradient(180deg, hsl(230 40% 3%) 0%, hsl(230 50% 2%) 100%);
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     -webkit-font-smoothing: antialiased;
   }
