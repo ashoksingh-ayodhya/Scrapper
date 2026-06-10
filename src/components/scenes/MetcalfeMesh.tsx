@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
+import { MONO_FONT_URL } from '@/lib/assets';
 import * as THREE from 'three';
 import type { SceneProps } from './registry';
 import { readVelocity } from './lib/velocity';
@@ -102,7 +103,7 @@ export default function MetcalfeMesh({ accent, ambient }: SceneProps) {
         ))}
       </group>
       <Text
-        font="/fonts/jetbrains-mono-400.woff"
+        font={MONO_FONT_URL}
         fontSize={0.42}
         color={accent}
         anchorX="center"
