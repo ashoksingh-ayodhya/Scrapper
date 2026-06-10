@@ -6,6 +6,7 @@ import { theories } from '@/data/theories';
 import { ACCENT_BORDER, ACCENT_GLOW, ACCENT_TEXT } from '@/lib/accents';
 import SceneCanvas from '@/components/scenes/SceneCanvas';
 import Reveal from '@/components/Reveal';
+import ComicFrame from '@/components/ComicFrame';
 
 export default function TheoryDeepDive() {
   const { id } = useParams();
@@ -89,12 +90,18 @@ export default function TheoryDeepDive() {
                 <AlertTriangle className="h-4 w-4" /> THE AGENCY GUESS
               </h3>
               <p className="mb-6">{theory.deepDive.agencyGuess}</p>
-              <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-red-500/20 bg-red-950/20 p-6 text-center">
-                <AlertTriangle className="h-10 w-10 text-red-400/70" />
-                <p className="font-mono text-[10px] leading-relaxed text-red-400/50">
-                  {theory.deepDive.agencyComicPrompt}
-                </p>
-              </div>
+              <ComicFrame
+                src={`${import.meta.env.BASE_URL}comics/${theory.id}-agency.webp`}
+                alt={`Agency guess comic — ${theory.title}`}
+                fallback={
+                  <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-red-500/20 bg-red-950/20 p-6 text-center">
+                    <AlertTriangle className="h-10 w-10 text-red-400/70" />
+                    <p className="font-mono text-[10px] leading-relaxed text-red-400/50">
+                      {theory.deepDive.agencyComicPrompt}
+                    </p>
+                  </div>
+                }
+              />
             </section>
           </Reveal>
 
@@ -104,12 +111,18 @@ export default function TheoryDeepDive() {
                 <Compass className="h-4 w-4" /> THE PHYSICIST'S REALIGNMENT
               </h3>
               <p className="mb-6">{theory.deepDive.physicistRealignment}</p>
-              <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-cyan-500/20 bg-cyan-950/20 p-6 text-center">
-                <Compass className="h-10 w-10 text-cyan-400/70" />
-                <p className="font-mono text-[10px] leading-relaxed text-cyan-400/50">
-                  {theory.deepDive.physicistComicPrompt}
-                </p>
-              </div>
+              <ComicFrame
+                src={`${import.meta.env.BASE_URL}comics/${theory.id}-physicist.webp`}
+                alt={`Physicist realignment comic — ${theory.title}`}
+                fallback={
+                  <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-cyan-500/20 bg-cyan-950/20 p-6 text-center">
+                    <Compass className="h-10 w-10 text-cyan-400/70" />
+                    <p className="font-mono text-[10px] leading-relaxed text-cyan-400/50">
+                      {theory.deepDive.physicistComicPrompt}
+                    </p>
+                  </div>
+                }
+              />
             </section>
           </Reveal>
 
